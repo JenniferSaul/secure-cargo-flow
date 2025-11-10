@@ -58,8 +58,10 @@ contract SecureCargoFlow is SepoliaConfig {
     uint256 public totalShipments;
 
     /// @notice Events
-    event ShipmentCreated(string trackingId, address creator, string origin, string destination, uint256 estimatedDelivery);
+    event ShipmentCreated(string indexed trackingId, address creator, string origin, string destination, uint256 estimatedDelivery);
+    // BUG: Missing indexed keyword for critical event parameters - affects chain querying performance
     event CargoEventAdded(string trackingId, uint256 eventId, address creator, string location, ShipmentStatus status);
+    event StatusUpdated(string indexed trackingId, uint256 indexed eventId, address indexed creator, ShipmentStatus oldStatus, ShipmentStatus newStatus);
 
     /// @notice Constructor - initializes contract with owner
     constructor() {
@@ -228,8 +230,13 @@ contract SecureCargoFlow is SepoliaConfig {
         // BUG: No validation of required events before certain transitions
         // Missing complex validation logic for status changes
 
+        ShipmentStatus oldStatus = getCurrentStatus(trackingId);
+
         // Just update without proper validation
         addCargoEvent(trackingId, "Status Update", newStatus, string(abi.encodePacked("Status changed to ", _statusToString(newStatus))));
+
+        // Emit status update event
+        emit StatusUpdated(trackingId, eventCounts[trackingId], msg.sender, oldStatus, newStatus);
     }
 
     /// @notice Get current status of a shipment
@@ -253,6 +260,56 @@ contract SecureCargoFlow is SepoliaConfig {
         if (status == ShipmentStatus.Arrived) return "Arrived";
         if (status == ShipmentStatus.Delivered) return "Delivered";
         return "Unknown";
+    }
+
+    /// @notice Get complete shipment details including all events
+    /// @param trackingId Shipment tracking ID
+    /// @return shipment Basic shipment info
+    /// @return events Array of all cargo events
+    /// @return eventCount Total number of events
+    function getShipmentDetails(string memory trackingId)
+        external
+        view
+        returns (
+            Shipment memory shipment,
+            CargoEvent[] memory events,
+            uint256 eventCount
+        )
+    {
+        require(shipments[trackingId].exists, "Shipment does not exist");
+
+        shipment = shipments[trackingId];
+        events = cargoEvents[trackingId];
+        eventCount = eventCounts[trackingId];
+    }
+
+    /// @notice Get shipment history summary
+    /// @param trackingId Shipment tracking ID
+    /// @return locations Array of locations visited
+    /// @return statuses Array of status changes
+    /// @return timestamps Array of event timestamps
+    function getShipmentHistory(string memory trackingId)
+        external
+        view
+        returns (
+            string[] memory locations,
+            ShipmentStatus[] memory statuses,
+            uint256[] memory timestamps
+        )
+    {
+        require(shipments[trackingId].exists, "Shipment does not exist");
+
+        uint256 count = cargoEvents[trackingId].length;
+        locations = new string[](count);
+        statuses = new ShipmentStatus[](count);
+        timestamps = new uint256[](count);
+
+        for (uint256 i = 0; i < count; i++) {
+            CargoEvent memory event_ = cargoEvents[trackingId][i];
+            locations[i] = event_.location;
+            statuses[i] = event_.status;
+            timestamps[i] = event_.timestamp;
+        }
     }
 
     /// @notice Get shipment details
