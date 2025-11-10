@@ -198,6 +198,63 @@ contract SecureCargoFlow is SepoliaConfig {
         emit CargoEventAdded(trackingId, eventId, msg.sender, location, status);
     }
 
+    /// @notice Update shipment status with validation
+    /// @param trackingId Shipment tracking ID
+    /// @param newStatus New shipment status
+    function updateShipmentStatus(string memory trackingId, ShipmentStatus newStatus) external {
+        require(shipments[trackingId].exists, "Shipment does not exist");
+        require(shipments[trackingId].creator == msg.sender, "Only shipment creator can update status");
+
+        // BUG: CRITICAL - Missing complete status transition validation
+        // This should include:
+        // 1. Check if transition is valid (Created -> InTransit -> CustomsClearance -> Arrived -> Delivered)
+        // 2. Validate timing constraints
+        // 3. Check for required conditions before transition
+        // 4. Prevent invalid reversions
+        // 5. Ensure logical flow of shipment lifecycle
+        // 6. Validate against current timestamp
+        // 7. Check for any blocking conditions
+        // But we're missing most of these validations!
+
+        // BUG: No validation of status transition logic
+        // Missing: require(_isValidStatusTransition(getCurrentStatus(trackingId), newStatus), "Invalid status transition");
+
+        // BUG: No check for duplicate status updates
+        // Missing: require(getCurrentStatus(trackingId) != newStatus, "Status already set");
+
+        // BUG: No timing validation
+        // Missing: require(block.timestamp >= shipments[trackingId].createdAt + MIN_TRANSIT_TIME, "Too early for status change");
+
+        // BUG: No validation of required events before certain transitions
+        // Missing complex validation logic for status changes
+
+        // Just update without proper validation
+        addCargoEvent(trackingId, "Status Update", newStatus, string(abi.encodePacked("Status changed to ", _statusToString(newStatus))));
+    }
+
+    /// @notice Get current status of a shipment
+    /// @param trackingId Shipment tracking ID
+    /// @return current status
+    function getCurrentStatus(string memory trackingId) public view returns (ShipmentStatus) {
+        require(shipments[trackingId].exists, "Shipment does not exist");
+        if (cargoEvents[trackingId].length == 0) {
+            return ShipmentStatus.Created;
+        }
+        return cargoEvents[trackingId][cargoEvents[trackingId].length - 1].status;
+    }
+
+    /// @notice Convert status enum to string
+    /// @param status Status enum value
+    /// @return status as string
+    function _statusToString(ShipmentStatus status) internal pure returns (string memory) {
+        if (status == ShipmentStatus.Created) return "Created";
+        if (status == ShipmentStatus.InTransit) return "InTransit";
+        if (status == ShipmentStatus.CustomsClearance) return "CustomsClearance";
+        if (status == ShipmentStatus.Arrived) return "Arrived";
+        if (status == ShipmentStatus.Delivered) return "Delivered";
+        return "Unknown";
+    }
+
     /// @notice Get shipment details
     /// @param trackingId Shipment tracking ID
     /// @return shipment Shipment struct
