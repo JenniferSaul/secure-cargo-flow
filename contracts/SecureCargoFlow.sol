@@ -212,36 +212,16 @@ contract SecureCargoFlow is SepoliaConfig {
         require(shipments[trackingId].exists, "Shipment does not exist");
         require(shipments[trackingId].creator == msg.sender, "Only shipment creator can update status");
 
-        // BUG: CRITICAL - Missing complete status transition validation
-        // This should include:
-        // 1. Check if transition is valid (Created -> InTransit -> CustomsClearance -> Arrived -> Delivered)
-        // 2. Validate timing constraints
-        // 3. Check for required conditions before transition
-        // 4. Prevent invalid reversions
-        // 5. Ensure logical flow of shipment lifecycle
-        // 6. Validate against current timestamp
-        // 7. Check for any blocking conditions
-        // But we're missing most of these validations!
+        ShipmentStatus currentStatus = getCurrentStatus(trackingId);
+        require(currentStatus != newStatus, "Status already set");
+        require(_isValidStatusTransition(currentStatus, newStatus), "Invalid status transition");
+        require(block.timestamp >= shipments[trackingId].createdAt + 1 hours, "Too early for status change");
 
-        // BUG: No validation of status transition logic
-        // Missing: require(_isValidStatusTransition(getCurrentStatus(trackingId), newStatus), "Invalid status transition");
+        ShipmentStatus oldStatus = currentStatus;
 
-        // BUG: No check for duplicate status updates
-        // Missing: require(getCurrentStatus(trackingId) != newStatus, "Status already set");
-
-        // BUG: No timing validation
-        // Missing: require(block.timestamp >= shipments[trackingId].createdAt + MIN_TRANSIT_TIME, "Too early for status change");
-
-        // BUG: No validation of required events before certain transitions
-        // Missing complex validation logic for status changes
-
-        ShipmentStatus oldStatus = getCurrentStatus(trackingId);
-
-        // Just update without proper validation
         addCargoEvent(trackingId, "Status Update", newStatus, string(abi.encodePacked("Status changed to ", _statusToString(newStatus))));
 
-        // Emit status update event
-        emit StatusUpdated(trackingId, eventCounts[trackingId], msg.sender, oldStatus, newStatus);
+        emit StatusUpdated(trackingId, eventCounts[trackingId] - 1, msg.sender, oldStatus, newStatus);
     }
 
     /// @notice Get current status of a shipment
@@ -265,6 +245,19 @@ contract SecureCargoFlow is SepoliaConfig {
         if (status == ShipmentStatus.Arrived) return "Arrived";
         if (status == ShipmentStatus.Delivered) return "Delivered";
         return "Unknown";
+    }
+
+    /// @notice Check if status transition is valid
+    /// @param currentStatus Current shipment status
+    /// @param newStatus New shipment status
+    /// @return isValid Whether the transition is valid
+    function _isValidStatusTransition(ShipmentStatus currentStatus, ShipmentStatus newStatus) internal pure returns (bool) {
+        // Valid transitions: Created -> InTransit -> CustomsClearance -> Arrived -> Delivered
+        if (currentStatus == ShipmentStatus.Created && newStatus == ShipmentStatus.InTransit) return true;
+        if (currentStatus == ShipmentStatus.InTransit && newStatus == ShipmentStatus.CustomsClearance) return true;
+        if (currentStatus == ShipmentStatus.CustomsClearance && newStatus == ShipmentStatus.Arrived) return true;
+        if (currentStatus == ShipmentStatus.Arrived && newStatus == ShipmentStatus.Delivered) return true;
+        return false; // No backward transitions or invalid jumps allowed
     }
 
     /// @notice Get complete shipment details including all events
