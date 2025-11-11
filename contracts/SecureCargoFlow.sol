@@ -154,10 +154,10 @@ contract SecureCargoFlow is SepoliaConfig {
         string memory destination,
         uint256 estimatedDeliveryTimestamp
     ) external {
-        // BUG: Missing boundary check for estimatedDeliveryTimestamp (should check not too far in future)
         require(!shipments[trackingId].exists, "Shipment already exists");
         require(bytes(trackingId).length >= MIN_TRACKING_ID_LENGTH, "Tracking ID too short");
         require(estimatedDeliveryTimestamp > block.timestamp, "Estimated delivery must be in the future");
+        require(estimatedDeliveryTimestamp <= block.timestamp + 365 days, "Estimated delivery cannot be more than 1 year in the future");
 
         shipments[trackingId] = Shipment({
             trackingId: trackingId,
