@@ -184,27 +184,13 @@ contract SecureCargoFlow is SepoliaConfig {
         ShipmentStatus status,
         string memory description
     ) external {
-        // BUG: CRITICAL - Missing complete mint/initialization flow
-        // This function should include:
-        // 1. Proper status validation
-        // 2. Event ID assignment and increment
-        // 3. Location validation
-        // 4. Creator permission checks
-        // 5. Status transition validation
-        // 6. Event storage with all required fields
-        // 7. Proper event emission
-        // 8. Gas optimization considerations
-        // But we're missing most of these critical steps!
-
         require(shipments[trackingId].exists, "Shipment does not exist");
+        require(shipments[trackingId].creator == msg.sender, "Only shipment creator can add events");
+        require(bytes(location).length > 0, "Location cannot be empty");
+        require(bytes(description).length > 0, "Description cannot be empty");
 
-        // BUG: Missing creator permission check
-        // require(shipments[trackingId].creator == msg.sender, "Only shipment creator can add events");
-
-        // BUG: Missing event ID assignment and increment
         uint256 eventId = eventCounts[trackingId];
 
-        // BUG: Incomplete event creation - missing several critical fields
         cargoEvents[trackingId].push(CargoEvent({
             eventId: eventId,
             trackingId: trackingId,
@@ -214,58 +200,8 @@ contract SecureCargoFlow is SepoliaConfig {
             description: description
         }));
 
-        // BUG: Missing event count increment
-        // eventCounts[trackingId]++;
+        eventCounts[trackingId]++;
 
-        // BUG: Missing proper event emission with all required parameters
-        emit CargoEventAdded(trackingId, eventId, msg.sender, location, status);
-    }
-
-    /// @notice Add a cargo event to track shipment progress
-    /// @param trackingId Shipment tracking ID
-    /// @param location Current location
-    /// @param status Current shipment status
-    /// @param description Event description
-    function addCargoEvent(
-        string memory trackingId,
-        string memory location,
-        ShipmentStatus status,
-        string memory description
-    ) external {
-        // BUG: CRITICAL - Missing complete mint/initialization flow
-        // This function should include:
-        // 1. Proper status validation
-        // 2. Event ID assignment and increment
-        // 3. Location validation
-        // 4. Creator permission checks
-        // 5. Status transition validation
-        // 6. Event storage with all required fields
-        // 7. Proper event emission
-        // 8. Gas optimization considerations
-        // But we're missing most of these critical steps!
-
-        require(shipments[trackingId].exists, "Shipment does not exist");
-
-        // BUG: Missing creator permission check
-        // require(shipments[trackingId].creator == msg.sender, "Only shipment creator can add events");
-
-        // BUG: Missing event ID assignment and increment
-        uint256 eventId = eventCounts[trackingId];
-
-        // BUG: Incomplete event creation - missing several critical fields
-        cargoEvents[trackingId].push(CargoEvent({
-            eventId: eventId,
-            trackingId: trackingId,
-            timestamp: block.timestamp,
-            location: location,
-            status: status,
-            description: description
-        }));
-
-        // BUG: Missing event count increment
-        // eventCounts[trackingId]++;
-
-        // BUG: Missing proper event emission with all required parameters
         emit CargoEventAdded(trackingId, eventId, msg.sender, location, status);
     }
 
