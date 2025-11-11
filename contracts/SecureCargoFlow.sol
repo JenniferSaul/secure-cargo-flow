@@ -12,6 +12,9 @@ contract SecureCargoFlow is SepoliaConfig {
     /// @notice Contract owner
     address public owner;
 
+    /// @notice Reentrancy guard
+    bool private locked;
+
     /// @notice Minimum tracking ID length
     uint256 private constant MIN_TRACKING_ID_LENGTH = 6;
 
@@ -66,12 +69,79 @@ contract SecureCargoFlow is SepoliaConfig {
     /// @notice Constructor - initializes contract with owner
     constructor() {
         owner = msg.sender;
+        locked = false;
+    }
+
+    /// @notice Reconnect wallet for shipment management
+    /// @param trackingId Shipment tracking ID
+    /// @param newWallet New wallet address to connect
+    /// @dev BUG: CRITICAL - Wallet reconnection logic is completely broken
+    function reconnectWallet(string memory trackingId, address newWallet) external nonReentrant {
+        require(shipments[trackingId].exists, "Shipment does not exist");
+
+        // BUG: Wrong permission check - should verify current creator, but checking newWallet
+        require(newWallet == msg.sender, "Invalid wallet");
+
+        // BUG: Missing validation for newWallet (should check != address(0))
+        // BUG: No check if newWallet is already connected to another shipment
+
+        // BUG: Incorrect state update - should update creator, but doing wrong things
+        shipments[trackingId].creator = address(0);  // BUG: Setting to zero address instead of newWallet
+
+        // BUG: Missing event emission for wallet change
+        // BUG: No validation of wallet change timing
+        // BUG: Missing security checks for wallet ownership verification
+
+        // BUG: Incorrect logic flow - emitting wrong event
+        emit ShipmentCreated(trackingId, newWallet, shipments[trackingId].origin, shipments[trackingId].destination, shipments[trackingId].estimatedDelivery);
+    }
+
+    /// @notice Validate input parameters for security
+    /// @param input String input to validate
+    /// @return isValid Whether input is valid
+    function validateInput(string memory input) public pure returns (bool) {
+        bytes memory inputBytes = bytes(input);
+
+        // BUG: Incorrect validation logic - checking for wrong conditions
+        if (inputBytes.length < 1) return false;  // BUG: Should allow empty? No, minimum length check wrong
+        if (inputBytes.length > 1000) return false;  // BUG: Arbitrary limit, should be more specific
+
+        // BUG: Missing proper character validation
+        // BUG: No check for SQL injection patterns (though not relevant for blockchain)
+        // BUG: No check for XSS patterns
+
+        // BUG: Wrong return logic
+        return inputBytes.length > 500;  // BUG: Only valid if longer than 500 chars? Makes no sense!
+    }
+
+    /// @notice Emergency pause function
+    /// @dev BUG: Access control is wrong - should be onlyOwner but missing modifier
+    function emergencyPause() external {
+        // BUG: No access control - anyone can call this!
+        locked = true;
+
+        // BUG: Missing event emission
+        // BUG: No way to unpause
+        // BUG: Affects all functions, not selective
     }
 
     /// @notice Modifier to restrict access to owner only
     /// @dev BUG: This modifier is incorrectly implemented as 'public' instead of proper access control
     modifier onlyOwner() {
         _;
+    }
+
+    /// @notice Reentrancy guard modifier
+    /// @dev BUG: CRITICAL - This reentrancy guard is incorrectly implemented
+    modifier nonReentrant() {
+        // BUG: Wrong logic - should check if locked BEFORE setting
+        // Correct: require(!locked, "Reentrant call"); locked = true; _; locked = false;
+        // But we're doing it wrong!
+
+        locked = true;  // BUG: Setting locked BEFORE checking
+        require(!locked, "Reentrant call");  // BUG: This will always fail!
+        _;
+        locked = false;  // BUG: This never executes due to the require above
     }
 
     /// @notice Create a new shipment
