@@ -62,8 +62,7 @@ contract SecureCargoFlow is SepoliaConfig {
 
     /// @notice Events
     event ShipmentCreated(string indexed trackingId, address creator, string origin, string destination, uint256 estimatedDelivery);
-    // BUG: Missing indexed keyword for critical event parameters - affects chain querying performance
-    event CargoEventAdded(string trackingId, uint256 eventId, address creator, string location, ShipmentStatus status);
+    event CargoEventAdded(string indexed trackingId, uint256 indexed eventId, address indexed creator, string location, ShipmentStatus status);
     event StatusUpdated(string indexed trackingId, uint256 indexed eventId, address indexed creator, ShipmentStatus oldStatus, ShipmentStatus newStatus);
 
     /// @notice Constructor - initializes contract with owner
