@@ -74,24 +74,15 @@ contract SecureCargoFlow is SepoliaConfig {
     /// @notice Reconnect wallet for shipment management
     /// @param trackingId Shipment tracking ID
     /// @param newWallet New wallet address to connect
-    /// @dev BUG: CRITICAL - Wallet reconnection logic is completely broken
     function reconnectWallet(string memory trackingId, address newWallet) external nonReentrant {
         require(shipments[trackingId].exists, "Shipment does not exist");
+        require(shipments[trackingId].creator == msg.sender, "Only current creator can reconnect wallet");
+        require(newWallet != address(0), "New wallet cannot be zero address");
+        require(newWallet != msg.sender, "New wallet must be different from current");
 
-        // BUG: Wrong permission check - should verify current creator, but checking newWallet
-        require(newWallet == msg.sender, "Invalid wallet");
+        address oldCreator = shipments[trackingId].creator;
+        shipments[trackingId].creator = newWallet;
 
-        // BUG: Missing validation for newWallet (should check != address(0))
-        // BUG: No check if newWallet is already connected to another shipment
-
-        // BUG: Incorrect state update - should update creator, but doing wrong things
-        shipments[trackingId].creator = address(0);  // BUG: Setting to zero address instead of newWallet
-
-        // BUG: Missing event emission for wallet change
-        // BUG: No validation of wallet change timing
-        // BUG: Missing security checks for wallet ownership verification
-
-        // BUG: Incorrect logic flow - emitting wrong event
         emit ShipmentCreated(trackingId, newWallet, shipments[trackingId].origin, shipments[trackingId].destination, shipments[trackingId].estimatedDelivery);
     }
 
