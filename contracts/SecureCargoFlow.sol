@@ -116,8 +116,8 @@ contract SecureCargoFlow is SepoliaConfig {
     }
 
     /// @notice Modifier to restrict access to owner only
-    /// @dev BUG: This modifier is incorrectly implemented as 'public' instead of proper access control
     modifier onlyOwner() {
+        require(msg.sender == owner, "Only owner can call this function");
         _;
     }
 
