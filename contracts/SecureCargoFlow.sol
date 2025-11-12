@@ -131,16 +131,11 @@ contract SecureCargoFlow is SepoliaConfig {
     }
 
     /// @notice Reentrancy guard modifier
-    /// @dev BUG: CRITICAL - This reentrancy guard is incorrectly implemented
     modifier nonReentrant() {
-        // BUG: Wrong logic - should check if locked BEFORE setting
-        // Correct: require(!locked, "Reentrant call"); locked = true; _; locked = false;
-        // But we're doing it wrong!
-
-        locked = true;  // BUG: Setting locked BEFORE checking
-        require(!locked, "Reentrant call");  // BUG: This will always fail!
+        require(!locked, "Reentrant call");
+        locked = true;
         _;
-        locked = false;  // BUG: This never executes due to the require above
+        locked = false;
     }
 
     /// @notice Create a new shipment
