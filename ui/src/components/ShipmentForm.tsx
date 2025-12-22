@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -77,7 +77,7 @@ export const ShipmentForm = () => {
     },
   });
 
-  const onSubmit = async (data: ShipmentFormValues) => {
+  const onSubmit = useCallback(async (data: ShipmentFormValues) => {
     if (!isConnected) {
       toast.error("Please connect your wallet first");
       return;
@@ -87,8 +87,9 @@ export const ShipmentForm = () => {
     try {
       // Parse weight (remove "kg" if present)
       const weightValue = parseFloat(data.weight.replace(/[^0-9.]/g, ""));
-      if (isNaN(weightValue)) {
-        toast.error("Invalid weight value");
+      if (isNaN(weightValue) || weightValue <= 0) {
+        toast.error("Invalid weight value. Please enter a positive number.");
+        setIsSubmitting(false);
         return;
       }
 
@@ -127,9 +128,9 @@ export const ShipmentForm = () => {
         await new Promise(resolve => setTimeout(resolve, 3000));
       } catch (eventError) {
         console.error("Failed to add cargo event:", eventError);
-        console.error("Error details:", eventError instanceof Error ? eventError.message : String(eventError));
-        toast.error(`Shipment created but failed to add initial event: ${eventError instanceof Error ? eventError.message : 'Unknown error'}. Check console for details.`);
-        // Don't continue if event failed
+        const errorMsg = eventError instanceof Error ? eventError.message : String(eventError);
+        console.error("Error details:", errorMsg);
+        toast.error(`Shipment created but failed to add initial event: ${errorMsg}. Please add event manually.`);
       }
 
       if (eventAdded) {
@@ -152,7 +153,7 @@ export const ShipmentForm = () => {
     } finally {
       setIsSubmitting(false);
     }
-  };
+  }, [isConnected, createShipment, addCargoEvent, form]);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -267,23 +268,37 @@ export const ShipmentForm = () => {
               )}
             />
 
+            {!isConnected && (
+              <div className="p-3 bg-muted/50 border border-border rounded-md">
+                <p className="text-sm text-muted-foreground">
+                  Please connect your wallet to create a shipment
+                </p>
+              </div>
+            )}
+            
             <div className="flex justify-end gap-3 pt-4">
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => setOpen(false)}
+                onClick={() => {
+                  form.reset();
+                  setOpen(false);
+                }}
                 disabled={isSubmitting || isPending}
               >
                 Cancel
               </Button>
-              <Button type="submit" disabled={isSubmitting || isPending}>
+              <Button type="submit" disabled={isSubmitting || isPending || !isConnected}>
                 {isSubmitting || isPending ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                     Creating...
                   </>
                 ) : (
-                  "Create Shipment"
+                  <>
+                    <Plus className="w-4 h-4 mr-2" />
+                    Create Shipment
+                  </>
                 )}
               </Button>
             </div>

@@ -3,9 +3,9 @@ import { HardhatRuntimeEnvironment } from "hardhat/types";
 
 const func: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
   const { deployer } = await hre.getNamedAccounts();
-  const { deploy, getChainId } = hre.deployments;
+  const { deploy } = hre.deployments;
 
-  const chainId = await getChainId();
+  const chainId = await hre.getChainId();
   console.log(`Deploying to network with chainId: ${chainId}`);
 
   const deployedSecureCargoFlow = await deploy("SecureCargoFlow", {

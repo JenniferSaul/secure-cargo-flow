@@ -80,7 +80,6 @@ contract SecureCargoFlow is SepoliaConfig {
         require(newWallet != address(0), "New wallet cannot be zero address");
         require(newWallet != msg.sender, "New wallet must be different from current");
 
-        address oldCreator = shipments[trackingId].creator;
         shipments[trackingId].creator = newWallet;
 
         emit ShipmentCreated(trackingId, newWallet, shipments[trackingId].origin, shipments[trackingId].destination, shipments[trackingId].estimatedDelivery);
@@ -169,7 +168,7 @@ contract SecureCargoFlow is SepoliaConfig {
         string memory location,
         ShipmentStatus status,
         string memory description
-    ) external {
+    ) public {
         require(shipments[trackingId].exists, "Shipment does not exist");
         require(shipments[trackingId].creator == msg.sender, "Only shipment creator can add events");
         require(bytes(location).length > 0, "Location cannot be empty");

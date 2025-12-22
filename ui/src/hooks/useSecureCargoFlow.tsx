@@ -1,10 +1,10 @@
-import { useAccount, useWriteContract, useChainId, usePublicClient } from 'wagmi';
+import { useAccount, useWriteContract, useChainId, usePublicClient, useWalletClient } from 'wagmi';
 import { useFHEVM } from './useFHEVM';
 import { SECURE_CARGO_FLOW_ABI, CONTRACT_ADDRESSES } from '@/config/contracts';
-import { useWalletClient } from 'wagmi';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback } from 'react';
 import { toast } from 'sonner';
 import { waitForTransactionReceipt } from 'viem/actions';
+import type { Address } from 'viem';
 
 export function useSecureCargoFlow() {
   const { address, isConnected } = useAccount();
@@ -13,15 +13,6 @@ export function useSecureCargoFlow() {
   const { data: walletClient } = useWalletClient();
   const publicClient = usePublicClient();
   const { instance, isInitialized, createEncryptedInput, generateKeypair, userDecrypt } = useFHEVM();
-
-  const [trigger, setTrigger] = useState(0);
-
-  // Bug: Infinite re-render loop
-  useEffect(() => {
-    setTrigger(prev => prev + 1);
-  }, [trigger]);
-
-  // Expose instance for createEIP712 if needed
 
   const getContractAddress = useCallback(() => {
     if (chainId === 31337 || chainId === 1337) {
@@ -55,7 +46,7 @@ export function useSecureCargoFlow() {
         console.log('Creating shipment transaction...');
         
         const hash = await walletClient.writeContract({
-          address: contractAddress as `0x${string}`,
+          address: contractAddress as Address,
           abi: SECURE_CARGO_FLOW_ABI,
           functionName: 'createShipment',
           args: [trackingId, origin, destination, BigInt(estimatedDelivery)],
@@ -91,7 +82,7 @@ export function useSecureCargoFlow() {
       try {
         const contractAddress = getContractAddress();
         const count = await publicClient.readContract({
-          address: contractAddress as `0x${string}`,
+          address: contractAddress as Address,
           abi: SECURE_CARGO_FLOW_ABI,
           functionName: 'getEventCount',
           args: [trackingId],
@@ -110,117 +101,36 @@ export function useSecureCargoFlow() {
       trackingId: string,
       location: string,
       status: number,
-      weightInKg: number | null, // null means use previous event's weight
-      contents: string
+      weightInKg: number | null, // Not used in current contract, kept for compatibility
+      contents: string // Used as description in the contract
     ) => {
       if (!isConnected || !address) {
         toast.error('Please connect wallet first');
         throw new Error('Wallet not connected');
       }
-      
-      if (!instance || !isInitialized) {
-        toast.error('FHE not initialized. Please wait a moment and try again.');
-        throw new Error('FHE not initialized');
-      }
 
       try {
         const contractAddress = getContractAddress();
-        console.log('Adding cargo event:', { trackingId, location, status, weightInKg, contents, contractAddress });
+        console.log('Adding cargo event:', { trackingId, location, status, contents, contractAddress });
 
         if (!walletClient || !publicClient) {
           toast.error('Wallet client not ready');
           throw new Error('Wallet client not ready');
         }
 
-        // Helper function to convert value to hex string
-        const toHexString = (value: any, expectedLength?: number): string => {
-          let hex: string;
-          
-          if (typeof value === 'string') {
-            hex = value.startsWith('0x') ? value : `0x${value}`;
-          } else if (typeof value === 'bigint') {
-            hex = `0x${value.toString(16).padStart(64, '0')}`;
-          } else if (value instanceof Uint8Array || Array.isArray(value)) {
-            const bytes = value instanceof Uint8Array ? Array.from(value) : value;
-            hex = `0x${bytes.map((b: number) => b.toString(16).padStart(2, '0')).join('')}`;
-          } else if (typeof value === 'number') {
-            hex = `0x${value.toString(16).padStart(64, '0')}`;
-          } else {
-            const str = String(value);
-            hex = str.startsWith('0x') ? str : `0x${str}`;
-          }
-          
-          if (expectedLength) {
-            const targetLength = expectedLength * 2 + 2;
-            if (hex.length < targetLength) {
-              hex = hex + '0'.repeat(targetLength - hex.length);
-            } else if (hex.length > targetLength) {
-              hex = hex.substring(0, targetLength);
-            }
-          }
-          
-          return hex;
-        };
-
-        // Prepare weight value
-        const eventCount = await getEventCount(trackingId);
-        let weightInGrams: number;
-        
-        if (eventCount > 0 && weightInKg === null) {
-          // Use dummy weight for subsequent events (contract will use previous weight)
-          weightInGrams = 1000000; // Dummy value, contract will ignore this
-          console.log('Using dummy weight for subsequent event (contract will use previous weight)');
-        } else if (weightInKg !== null) {
-          // First event: use provided weight
-          weightInGrams = Math.floor(weightInKg * 1000);
-          console.log('Encrypting weight (first event):', weightInGrams, 'grams');
-        } else {
-          throw new Error('Weight is required for first event');
-        }
-
-        // Encrypt contents byte by byte (like SecretBank)
-        console.log('Encrypting contents byte by byte...');
-        const contentsBytes = new TextEncoder().encode(contents.slice(0, 64)); // Limit to 64 bytes
-        console.log('Contents bytes:', contentsBytes.length, 'bytes');
-        
-        // Create single encrypted input for both weight and contents bytes (like SecretBank)
-        // This ensures they share the same inputProof
-        const combinedInput = createEncryptedInput(contractAddress, address);
-        
-        // Add weight first
-        combinedInput.add32(weightInGrams);
-        
-        // Add each content byte
-        for (const b of contentsBytes) {
-          combinedInput.add8(b); // Encrypt each byte as euint8
-        }
-        
-        // Encrypt all together (weight + all content bytes share the same proof)
-        const combinedEncrypted = await combinedInput.encrypt();
-        
-        // Extract handles: handles[0] = weight, handles[1..N] = content bytes
-        // Since weight and contents were encrypted together, they share the same proof
-        const encryptedWeightHandle = toHexString(combinedEncrypted.handles[0], 32);
-        const sharedProof = toHexString(combinedEncrypted.inputProof); // Shared proof for both weight and contents
-        const contentsByteHandles = combinedEncrypted.handles.slice(1).map((h: any) => toHexString(h, 32));
-
-        console.log('All encrypted, calling contract...');
-        console.log('Weight handle:', encryptedWeightHandle);
-        console.log('Contents byte handles:', contentsByteHandles.length, 'bytes');
-        console.log('Shared proof length:', sharedProof.length);
+        // Current contract uses simple string parameters
+        // description field is used for contents
+        const description = contents || `Weight: ${weightInKg ? weightInKg + ' kg' : 'N/A'}`;
 
         const hash = await walletClient.writeContract({
-          address: contractAddress as `0x${string}`,
+          address: contractAddress as Address,
           abi: SECURE_CARGO_FLOW_ABI,
           functionName: 'addCargoEvent',
           args: [
             trackingId,
             location,
             status,
-            encryptedWeightHandle as `0x${string}`,
-            sharedProof as `0x${string}`, // Same proof for weight (they were encrypted together)
-            contentsByteHandles as `0x${string}`[], // Array of byte handles
-            sharedProof as `0x${string}`, // Same proof for contents bytes
+            description,
           ],
         });
         
@@ -245,7 +155,7 @@ export function useSecureCargoFlow() {
         throw error;
       }
     },
-    [isConnected, address, instance, isInitialized, createEncryptedInput, walletClient, publicClient, getContractAddress, getEventCount]
+    [isConnected, address, walletClient, publicClient, getContractAddress]
   );
 
   const decryptWeight = useCallback(
@@ -266,7 +176,7 @@ export function useSecureCargoFlow() {
         // Read encrypted weight from contract
         console.log('Reading encrypted weight:', { trackingId, eventIndex, contractAddress });
         const encryptedWeight = await publicClient.readContract({
-          address: contractAddress as `0x${string}`,
+          address: contractAddress as Address,
           abi: SECURE_CARGO_FLOW_ABI,
           functionName: 'getEncryptedWeight',
           args: [trackingId, BigInt(eventIndex)],
@@ -387,7 +297,7 @@ export function useSecureCargoFlow() {
         // Get contents length first
         console.log('Getting contents length:', { trackingId, eventIndex, contractAddress });
         const contentsLength = await publicClient.readContract({
-          address: contractAddress as `0x${string}`,
+          address: contractAddress as Address,
           abi: SECURE_CARGO_FLOW_ABI,
           functionName: 'getContentsLength',
           args: [trackingId, BigInt(eventIndex)],
@@ -406,7 +316,7 @@ export function useSecureCargoFlow() {
         for (let i = 0; i < length; i++) {
           // Get encrypted byte from contract
           const encByte = await publicClient.readContract({
-            address: contractAddress as `0x${string}`,
+            address: contractAddress as Address,
             abi: SECURE_CARGO_FLOW_ABI,
             functionName: 'getEncryptedContentsByte',
             args: [trackingId, BigInt(eventIndex), BigInt(i)],
@@ -514,7 +424,7 @@ export function useSecureCargoFlow() {
       try {
         const contractAddress = getContractAddress();
         const shipment = await publicClient.readContract({
-          address: contractAddress as `0x${string}`,
+          address: contractAddress as Address,
           abi: SECURE_CARGO_FLOW_ABI,
           functionName: 'getShipment',
           args: [trackingId],
@@ -528,7 +438,7 @@ export function useSecureCargoFlow() {
     [publicClient, getContractAddress]
   );
 
-  const getCargoEventPublic = useCallback(
+  const getCargoEvent = useCallback(
     async (trackingId: string, eventIndex: number) => {
       if (!publicClient) {
         return null;
@@ -537,9 +447,9 @@ export function useSecureCargoFlow() {
       try {
         const contractAddress = getContractAddress();
         const event = await publicClient.readContract({
-          address: contractAddress as `0x${string}`,
+          address: contractAddress as Address,
           abi: SECURE_CARGO_FLOW_ABI,
-          functionName: 'getCargoEventPublic',
+          functionName: 'getCargoEvent',
           args: [trackingId, BigInt(eventIndex)],
         });
         return event;
@@ -564,7 +474,7 @@ export function useSecureCargoFlow() {
         
         // Get event count
         const count = await publicClient.readContract({
-          address: contractAddress as `0x${string}`,
+          address: contractAddress as Address,
           abi: SECURE_CARGO_FLOW_ABI,
           functionName: 'getEventCount',
           args: [trackingId],
@@ -579,9 +489,9 @@ export function useSecureCargoFlow() {
           try {
             console.log(`Loading event ${i}/${eventCount - 1}...`);
             const event = await publicClient.readContract({
-              address: contractAddress as `0x${string}`,
+              address: contractAddress as Address,
               abi: SECURE_CARGO_FLOW_ABI,
-              functionName: 'getCargoEventPublic',
+              functionName: 'getCargoEvent',
               args: [trackingId, BigInt(i)],
             });
             
@@ -593,10 +503,8 @@ export function useSecureCargoFlow() {
                 timestamp: Number(event[1]),
                 location: event[2],
                 status: Number(event[3]),
-                contents: undefined, // Contents is encrypted, will be decrypted on demand
-                hasAnomaly: event[4],
-                anomaly: event[5],
-                isEncrypted: true, // Weight and contents are always encrypted
+                contents: event[4], // description is now stored as contents
+                isEncrypted: false, // Current contract doesn't use encryption
               });
             }
           } catch (eventError) {
@@ -624,7 +532,7 @@ export function useSecureCargoFlow() {
     decryptContents,
     getShipment,
     getEventCount,
-    getCargoEventPublic,
+    getCargoEvent,
     loadCargoEvents,
     isPending,
     contractAddress: getContractAddress(),
