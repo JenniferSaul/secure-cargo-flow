@@ -35,6 +35,8 @@ contract SecureCargoFlow is SepoliaConfig {
         string location;
         ShipmentStatus status;
         string description;
+        euint32 encryptedWeight;        // Encrypted weight in grams
+        euint8[] encContentsBytes;      // Encrypted contents (byte-by-byte)
     }
 
     /// @notice Shipment structure
@@ -158,23 +160,30 @@ contract SecureCargoFlow is SepoliaConfig {
         emit ShipmentCreated(trackingId, msg.sender, origin, destination, estimatedDeliveryTimestamp);
     }
 
-    /// @notice Add a cargo event to track shipment progress
+    /// @notice Add a cargo event to track shipment progress (internal version for status updates)
     /// @param trackingId Shipment tracking ID
     /// @param location Current location
     /// @param status Current shipment status
     /// @param description Event description
-    function addCargoEvent(
+    function _addCargoEventInternal(
         string memory trackingId,
         string memory location,
         ShipmentStatus status,
         string memory description
-    ) public {
+    ) internal {
         require(shipments[trackingId].exists, "Shipment does not exist");
-        require(shipments[trackingId].creator == msg.sender, "Only shipment creator can add events");
         require(bytes(location).length > 0, "Location cannot be empty");
         require(bytes(description).length > 0, "Description cannot be empty");
 
         uint256 eventId = eventCounts[trackingId];
+
+        // For internal calls (like status updates), reuse previous encrypted data if available
+        euint32 prevWeight;
+        euint8[] memory prevContents;
+        if (cargoEvents[trackingId].length > 0) {
+            prevWeight = cargoEvents[trackingId][0].encryptedWeight;
+            prevContents = cargoEvents[trackingId][0].encContentsBytes;
+        }
 
         cargoEvents[trackingId].push(CargoEvent({
             eventId: eventId,
@@ -182,10 +191,91 @@ contract SecureCargoFlow is SepoliaConfig {
             timestamp: block.timestamp,
             location: location,
             status: status,
-            description: description
+            description: description,
+            encryptedWeight: prevWeight,
+            encContentsBytes: prevContents
         }));
 
         eventCounts[trackingId]++;
+
+        emit CargoEventAdded(trackingId, eventId, msg.sender, location, status);
+    }
+
+    /// @notice Helper function to import encrypted contents bytes
+    /// @param encContentsBytes Encrypted contents bytes (externalEuint8[])
+    /// @param inputProof Input proof for contents
+    /// @return contents Array of imported encrypted bytes
+    function _importEncryptedContents(
+        externalEuint8[] calldata encContentsBytes,
+        bytes calldata inputProof
+    ) internal returns (euint8[] memory) {
+        euint8[] memory contents = new euint8[](encContentsBytes.length);
+        for (uint256 i = 0; i < encContentsBytes.length; i++) {
+            euint8 b = FHE.fromExternal(encContentsBytes[i], inputProof);
+            contents[i] = b;
+            FHE.allowThis(b);
+            FHE.allow(b, msg.sender);
+        }
+        return contents;
+    }
+
+    /// @notice Helper function to import encrypted weight and set permissions
+    /// @param encWeight Encrypted weight handle
+    /// @param weightInputProof Input proof for weight
+    /// @return weight Imported encrypted weight
+    function _importEncryptedWeight(
+        externalEuint32 encWeight,
+        bytes calldata weightInputProof
+    ) internal returns (euint32) {
+        euint32 weight = FHE.fromExternal(encWeight, weightInputProof);
+        FHE.allowThis(weight);
+        FHE.allow(weight, msg.sender);
+        return weight;
+    }
+
+    /// @notice Add a cargo event to track shipment progress with encrypted data
+    /// @param trackingId Shipment tracking ID
+    /// @param location Current location
+    /// @param status Current shipment status
+    /// @param description Event description (public)
+    /// @param encWeight Encrypted weight handle (externalEuint32)
+    /// @param weightInputProof Input proof for weight
+    /// @param encContentsBytes Encrypted contents bytes (externalEuint8[])
+    /// @param inputProof Input proof for contents (shared with weight)
+    function addCargoEvent(
+        string memory trackingId,
+        string memory location,
+        ShipmentStatus status,
+        string memory description,
+        externalEuint32 encWeight,
+        bytes calldata weightInputProof,
+        externalEuint8[] calldata encContentsBytes,
+        bytes calldata inputProof
+    ) public {
+        require(shipments[trackingId].exists, "Shipment does not exist");
+        require(shipments[trackingId].creator == msg.sender, "Only shipment creator can add events");
+        require(bytes(location).length > 0, "Location cannot be empty");
+        require(bytes(description).length > 0, "Description cannot be empty");
+
+        uint256 eventId = eventCounts[trackingId];
+        eventCounts[trackingId]++;
+
+        // Import encrypted data using helpers
+        euint32 weight = _importEncryptedWeight(encWeight, weightInputProof);
+        euint8[] memory contents = _importEncryptedContents(encContentsBytes, inputProof);
+
+        // Directly push to storage to avoid stack depth issues
+        cargoEvents[trackingId].push();
+        uint256 eventIndex = cargoEvents[trackingId].length - 1;
+        CargoEvent storage newEvent = cargoEvents[trackingId][eventIndex];
+        newEvent.eventId = eventId;
+        newEvent.trackingId = trackingId;
+        newEvent.timestamp = block.timestamp;
+        newEvent.location = location;
+        newEvent.status = status;
+        newEvent.description = description;
+        newEvent.encryptedWeight = weight;
+        newEvent.encContentsBytes = contents;
 
         emit CargoEventAdded(trackingId, eventId, msg.sender, location, status);
     }
@@ -204,7 +294,7 @@ contract SecureCargoFlow is SepoliaConfig {
 
         ShipmentStatus oldStatus = currentStatus;
 
-        addCargoEvent(trackingId, "Status Update", newStatus, string(abi.encodePacked("Status changed to ", _statusToString(newStatus))));
+        _addCargoEventInternal(trackingId, "Status Update", newStatus, string(abi.encodePacked("Status changed to ", _statusToString(newStatus))));
 
         emit StatusUpdated(trackingId, eventCounts[trackingId] - 1, msg.sender, oldStatus, newStatus);
     }
@@ -320,6 +410,85 @@ contract SecureCargoFlow is SepoliaConfig {
     /// @return status Event status
     /// @return description Event description
     function getCargoEvent(string memory trackingId, uint256 eventIndex)
+        external
+        view
+        returns (
+            uint256 eventId,
+            uint256 timestamp,
+            string memory location,
+            ShipmentStatus status,
+            string memory description
+        )
+    {
+        require(shipments[trackingId].exists, "Shipment does not exist");
+        require(eventIndex < cargoEvents[trackingId].length, "Event does not exist");
+
+        CargoEvent memory event_ = cargoEvents[trackingId][eventIndex];
+        return (
+            event_.eventId,
+            event_.timestamp,
+            event_.location,
+            event_.status,
+            event_.description
+        );
+    }
+
+    /// @notice Get encrypted weight for an event
+    /// @param trackingId Shipment tracking ID
+    /// @param eventIndex Event index
+    /// @return encryptedWeight Encrypted weight handle
+    function getEncryptedWeight(string memory trackingId, uint256 eventIndex)
+        external
+        view
+        returns (euint32)
+    {
+        require(shipments[trackingId].exists, "Shipment does not exist");
+        require(eventIndex < cargoEvents[trackingId].length, "Event does not exist");
+        return cargoEvents[trackingId][eventIndex].encryptedWeight;
+    }
+
+    /// @notice Get encrypted contents length for an event
+    /// @param trackingId Shipment tracking ID
+    /// @param eventIndex Event index
+    /// @return length Number of encrypted bytes
+    function getContentsLength(string memory trackingId, uint256 eventIndex)
+        external
+        view
+        returns (uint256)
+    {
+        require(shipments[trackingId].exists, "Shipment does not exist");
+        require(eventIndex < cargoEvents[trackingId].length, "Event does not exist");
+        return cargoEvents[trackingId][eventIndex].encContentsBytes.length;
+    }
+
+    /// @notice Get encrypted contents byte at index
+    /// @param trackingId Shipment tracking ID
+    /// @param eventIndex Event index
+    /// @param byteIndex Byte index
+    /// @return encryptedByte Encrypted byte handle
+    function getEncryptedContentsByte(
+        string memory trackingId,
+        uint256 eventIndex,
+        uint256 byteIndex
+    ) external view returns (euint8) {
+        require(shipments[trackingId].exists, "Shipment does not exist");
+        require(eventIndex < cargoEvents[trackingId].length, "Event does not exist");
+        require(
+            byteIndex < cargoEvents[trackingId][eventIndex].encContentsBytes.length,
+            "Byte index out of bounds"
+        );
+        return cargoEvents[trackingId][eventIndex].encContentsBytes[byteIndex];
+    }
+
+    /// @notice Get public cargo event data (location, status, timestamp)
+    /// @param trackingId Shipment tracking ID
+    /// @param eventIndex Event index
+    /// @return eventId Event ID
+    /// @return timestamp Event timestamp
+    /// @return location Event location
+    /// @return status Event status
+    /// @return description Event description
+    function getCargoEventPublic(string memory trackingId, uint256 eventIndex)
         external
         view
         returns (

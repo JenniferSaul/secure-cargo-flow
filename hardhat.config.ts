@@ -95,6 +95,7 @@ const config: HardhatUserConfig = {
         enabled: true,
         runs: 800,
       },
+      viaIR: true, // Enable IR-based compilation to avoid stack too deep errors
       evmVersion: "cancun",
     },
   },

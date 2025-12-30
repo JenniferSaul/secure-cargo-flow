@@ -4,12 +4,12 @@ Enterprise-grade cargo tracking system with end-to-end encryption using Fully Ho
 
 ## 🚀 Live Demo
 
-**Vercel Deployment**: [https://secure-cargo-flow.vercel.app/](https://secure-cargo-flow.vercel.app/)
+**Vercel Deployment**: [https://secure-cargo-flow.vercel.app/](https://secure-cargo-flow-pro.vercel.app/)
 
 ## 📹 Demo Video
 
 Watch the demo video to see Secure Cargo Flow in action:
-- [Demo Video](./secure-cargo-flow.mp4) (in repository)
+- [Demo Video](https://youtu.be/rlQAu_QOCMc) (in repository)
 - The video demonstrates the complete workflow: creating shipments, adding cargo events with encrypted data, and decrypting sensitive information
 
 ## Overview

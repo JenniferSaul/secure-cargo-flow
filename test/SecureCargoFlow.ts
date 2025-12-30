@@ -1,7 +1,8 @@
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
-import { ethers } from "hardhat";
+import { ethers, fhevm } from "hardhat";
 import { SecureCargoFlow, SecureCargoFlow__factory } from "../types";
 import { expect } from "chai";
+import { FhevmType } from "@fhevm/hardhat-plugin";
 
 type Signers = {
   deployer: HardhatEthersSigner;
@@ -17,6 +18,34 @@ async function deployFixture() {
   return { secureCargoFlowContract, secureCargoFlowContractAddress };
 }
 
+// Helper function to encrypt contents string
+async function encryptContents(
+  contractAddress: string,
+  userAddress: string,
+  contents: string
+): Promise<{ handles: string[]; inputProof: string }> {
+  // Convert string to bytes (limit to 64 bytes)
+  const contentsBytes: number[] = [];
+  const maxLength = Math.min(contents.length, 64);
+  for (let i = 0; i < maxLength; i++) {
+    contentsBytes.push(contents.charCodeAt(i));
+  }
+  
+  const encryptedInput = fhevm
+    .createEncryptedInput(contractAddress, userAddress);
+  
+  // Add each byte
+  for (const byte of contentsBytes) {
+    encryptedInput.add8(byte);
+  }
+  
+  const encrypted = await encryptedInput.encrypt();
+  return {
+    handles: encrypted.handles.map(h => ethers.hexlify(h)),
+    inputProof: ethers.hexlify(encrypted.inputProof),
+  };
+}
+
 describe("SecureCargoFlow", function () {
   let signers: Signers;
   let secureCargoFlowContract: SecureCargoFlow;
@@ -28,6 +57,12 @@ describe("SecureCargoFlow", function () {
   });
 
   beforeEach(async function () {
+    // Check whether the tests are running against an FHEVM mock environment
+    if (!fhevm.isMock) {
+      console.warn(`This hardhat test suite requires FHEVM mock environment`);
+      this.skip();
+    }
+
     ({ secureCargoFlowContract, secureCargoFlowContractAddress } = await deployFixture());
   });
 
@@ -62,6 +97,23 @@ describe("SecureCargoFlow", function () {
       .createShipment(trackingId, origin, destination, estimatedDelivery);
     await tx.wait();
 
+    // Encrypt weight and contents
+    const weightInGrams = 2500000; // 2500 kg
+    const contents = "Electronic Components (Class A)";
+    
+    // Encrypt weight
+    const encryptedWeight = await fhevm
+      .createEncryptedInput(secureCargoFlowContractAddress, signers.alice.address)
+      .add32(weightInGrams)
+      .encrypt();
+    
+    // Encrypt contents
+    const encryptedContents = await encryptContents(
+      secureCargoFlowContractAddress,
+      signers.alice.address,
+      contents
+    );
+
     // Add cargo event
     const location = "Shanghai Port, China";
     const status = 0; // ShipmentStatus.Created
@@ -69,17 +121,33 @@ describe("SecureCargoFlow", function () {
 
     tx = await secureCargoFlowContract
       .connect(signers.alice)
-      .addCargoEvent(trackingId, location, status, description);
+      .addCargoEvent(
+        trackingId,
+        location,
+        status,
+        description,
+        encryptedWeight.handles[0],
+        encryptedWeight.inputProof,
+        encryptedContents.handles,
+        encryptedContents.inputProof
+      );
     await tx.wait();
 
     const eventCount = await secureCargoFlowContract.getEventCount(trackingId);
     expect(eventCount).to.eq(1);
 
-    // Get event details
-    const event = await secureCargoFlowContract.getCargoEvent(trackingId, 0);
+    // Get event details (public data)
+    const event = await secureCargoFlowContract.getCargoEventPublic(trackingId, 0);
     expect(event.location).to.eq(location);
     expect(event.status).to.eq(status);
     expect(event.description).to.eq(description);
+    
+    // Verify encrypted data exists
+    const encryptedWeightHandle = await secureCargoFlowContract.getEncryptedWeight(trackingId, 0);
+    expect(encryptedWeightHandle).to.not.eq(ethers.ZeroHash);
+    
+    const contentsLength = await secureCargoFlowContract.getContentsLength(trackingId, 0);
+    expect(contentsLength).to.be.gt(0);
   });
 
   it("should prevent creating duplicate shipments", async function () {
@@ -104,11 +172,32 @@ describe("SecureCargoFlow", function () {
 
   it("should prevent adding events to non-existent shipments", async function () {
     const trackingId = "CARGO-NONEXISTENT";
+    
+    // Create dummy encrypted data
+    const encryptedWeight = await fhevm
+      .createEncryptedInput(secureCargoFlowContractAddress, signers.alice.address)
+      .add32(1000)
+      .encrypt();
+    
+    const encryptedContents = await encryptContents(
+      secureCargoFlowContractAddress,
+      signers.alice.address,
+      "Test"
+    );
 
     await expect(
       secureCargoFlowContract
         .connect(signers.alice)
-        .addCargoEvent(trackingId, "Some Location", 0, "Description")
+        .addCargoEvent(
+          trackingId,
+          "Some Location",
+          0,
+          "Description",
+          encryptedWeight.handles[0],
+          encryptedWeight.inputProof,
+          encryptedContents.handles,
+          encryptedContents.inputProof
+        )
     ).to.be.revertedWith("Shipment does not exist");
   });
 
@@ -136,10 +225,31 @@ describe("SecureCargoFlow", function () {
       .createShipment(trackingId, origin, destination, estimatedDelivery);
     await tx.wait();
 
+    // Create dummy encrypted data
+    const encryptedWeight = await fhevm
+      .createEncryptedInput(secureCargoFlowContractAddress, signers.bob.address)
+      .add32(1000)
+      .encrypt();
+    
+    const encryptedContents = await encryptContents(
+      secureCargoFlowContractAddress,
+      signers.bob.address,
+      "Test"
+    );
+
     await expect(
       secureCargoFlowContract
         .connect(signers.bob)
-        .addCargoEvent(trackingId, "Test Location", 0, "Test Description")
+        .addCargoEvent(
+          trackingId,
+          "Test Location",
+          0,
+          "Test Description",
+          encryptedWeight.handles[0],
+          encryptedWeight.inputProof,
+          encryptedContents.handles,
+          encryptedContents.inputProof
+        )
     ).to.be.revertedWith("Only shipment creator can add events");
   });
 
@@ -167,10 +277,31 @@ describe("SecureCargoFlow", function () {
       .createShipment(trackingId, origin, destination, estimatedDelivery);
     await tx.wait();
 
+    // Encrypt data for initial event
+    const encryptedWeight = await fhevm
+      .createEncryptedInput(secureCargoFlowContractAddress, signers.alice.address)
+      .add32(2500000)
+      .encrypt();
+    
+    const encryptedContents = await encryptContents(
+      secureCargoFlowContractAddress,
+      signers.alice.address,
+      "Initial cargo"
+    );
+
     // Add initial event
     tx = await secureCargoFlowContract
       .connect(signers.alice)
-      .addCargoEvent(trackingId, origin, 0, "Shipment created");
+      .addCargoEvent(
+        trackingId,
+        origin,
+        0,
+        "Shipment created",
+        encryptedWeight.handles[0],
+        encryptedWeight.inputProof,
+        encryptedContents.handles,
+        encryptedContents.inputProof
+      );
     await tx.wait();
 
     // Wait 1 hour (or increase block timestamp for testing)
@@ -193,10 +324,31 @@ describe("SecureCargoFlow", function () {
       .createShipment(trackingId, origin, destination, estimatedDelivery);
     await tx.wait();
 
+    // Create dummy encrypted data
+    const encryptedWeight = await fhevm
+      .createEncryptedInput(secureCargoFlowContractAddress, signers.alice.address)
+      .add32(1000)
+      .encrypt();
+    
+    const encryptedContents = await encryptContents(
+      secureCargoFlowContractAddress,
+      signers.alice.address,
+      "Test"
+    );
+
     await expect(
       secureCargoFlowContract
         .connect(signers.alice)
-        .addCargoEvent(trackingId, "", 0, "Description")
+        .addCargoEvent(
+          trackingId,
+          "",
+          0,
+          "Description",
+          encryptedWeight.handles[0],
+          encryptedWeight.inputProof,
+          encryptedContents.handles,
+          encryptedContents.inputProof
+        )
     ).to.be.revertedWith("Location cannot be empty");
   });
 
@@ -211,10 +363,31 @@ describe("SecureCargoFlow", function () {
       .createShipment(trackingId, origin, destination, estimatedDelivery);
     await tx.wait();
 
+    // Create dummy encrypted data
+    const encryptedWeight = await fhevm
+      .createEncryptedInput(secureCargoFlowContractAddress, signers.alice.address)
+      .add32(1000)
+      .encrypt();
+    
+    const encryptedContents = await encryptContents(
+      secureCargoFlowContractAddress,
+      signers.alice.address,
+      "Test"
+    );
+
     await expect(
       secureCargoFlowContract
         .connect(signers.alice)
-        .addCargoEvent(trackingId, "Location", 0, "")
+        .addCargoEvent(
+          trackingId,
+          "Location",
+          0,
+          "",
+          encryptedWeight.handles[0],
+          encryptedWeight.inputProof,
+          encryptedContents.handles,
+          encryptedContents.inputProof
+        )
     ).to.be.revertedWith("Description cannot be empty");
   });
 
@@ -230,15 +403,58 @@ describe("SecureCargoFlow", function () {
       .createShipment(trackingId, origin, destination, estimatedDelivery);
     await tx.wait();
 
+    // Encrypt data for events
+    const encryptedWeight1 = await fhevm
+      .createEncryptedInput(secureCargoFlowContractAddress, signers.alice.address)
+      .add32(2500000)
+      .encrypt();
+    
+    const encryptedContents1 = await encryptContents(
+      secureCargoFlowContractAddress,
+      signers.alice.address,
+      "Initial cargo"
+    );
+
     // Add multiple events
     tx = await secureCargoFlowContract
       .connect(signers.alice)
-      .addCargoEvent(trackingId, origin, 0, "Initial event");
+      .addCargoEvent(
+        trackingId,
+        origin,
+        0,
+        "Initial event",
+        encryptedWeight1.handles[0],
+        encryptedWeight1.inputProof,
+        encryptedContents1.handles,
+        encryptedContents1.inputProof
+      );
     await tx.wait();
+
+    // For second event, we can reuse weight from first event (contract handles this internally via _addCargoEventInternal)
+    // But for testing, we'll create new encrypted data
+    const encryptedWeight2 = await fhevm
+      .createEncryptedInput(secureCargoFlowContractAddress, signers.alice.address)
+      .add32(2500000)
+      .encrypt();
+    
+    const encryptedContents2 = await encryptContents(
+      secureCargoFlowContractAddress,
+      signers.alice.address,
+      "In transit cargo"
+    );
 
     tx = await secureCargoFlowContract
       .connect(signers.alice)
-      .addCargoEvent(trackingId, "Pacific Ocean", 1, "In transit");
+      .addCargoEvent(
+        trackingId,
+        "Pacific Ocean",
+        1,
+        "In transit",
+        encryptedWeight2.handles[0],
+        encryptedWeight2.inputProof,
+        encryptedContents2.handles,
+        encryptedContents2.inputProof
+      );
     await tx.wait();
 
     // Get shipment details
@@ -248,6 +464,8 @@ describe("SecureCargoFlow", function () {
     expect(details.events.length).to.eq(2);
     expect(details.events[0].location).to.eq(origin);
     expect(details.events[1].location).to.eq("Pacific Ocean");
+    expect(details.events[0].description).to.eq("Initial event");
+    expect(details.events[1].description).to.eq("In transit");
   });
 
   it("should get shipment history", async function () {
@@ -262,15 +480,56 @@ describe("SecureCargoFlow", function () {
       .createShipment(trackingId, origin, destination, estimatedDelivery);
     await tx.wait();
 
+    // Encrypt data for events
+    const encryptedWeight1 = await fhevm
+      .createEncryptedInput(secureCargoFlowContractAddress, signers.alice.address)
+      .add32(2500000)
+      .encrypt();
+    
+    const encryptedContents1 = await encryptContents(
+      secureCargoFlowContractAddress,
+      signers.alice.address,
+      "Event 1 contents"
+    );
+
     // Add events
     tx = await secureCargoFlowContract
       .connect(signers.alice)
-      .addCargoEvent(trackingId, "Location 1", 0, "Event 1");
+      .addCargoEvent(
+        trackingId,
+        "Location 1",
+        0,
+        "Event 1",
+        encryptedWeight1.handles[0],
+        encryptedWeight1.inputProof,
+        encryptedContents1.handles,
+        encryptedContents1.inputProof
+      );
     await tx.wait();
+
+    const encryptedWeight2 = await fhevm
+      .createEncryptedInput(secureCargoFlowContractAddress, signers.alice.address)
+      .add32(2500000)
+      .encrypt();
+    
+    const encryptedContents2 = await encryptContents(
+      secureCargoFlowContractAddress,
+      signers.alice.address,
+      "Event 2 contents"
+    );
 
     tx = await secureCargoFlowContract
       .connect(signers.alice)
-      .addCargoEvent(trackingId, "Location 2", 1, "Event 2");
+      .addCargoEvent(
+        trackingId,
+        "Location 2",
+        1,
+        "Event 2",
+        encryptedWeight2.handles[0],
+        encryptedWeight2.inputProof,
+        encryptedContents2.handles,
+        encryptedContents2.inputProof
+      );
     await tx.wait();
 
     // Get history
@@ -300,10 +559,31 @@ describe("SecureCargoFlow", function () {
     let currentStatus = await secureCargoFlowContract.getCurrentStatus(trackingId);
     expect(currentStatus).to.eq(0); // ShipmentStatus.Created
 
+    // Encrypt data for event
+    const encryptedWeight = await fhevm
+      .createEncryptedInput(secureCargoFlowContractAddress, signers.alice.address)
+      .add32(2500000)
+      .encrypt();
+    
+    const encryptedContents = await encryptContents(
+      secureCargoFlowContractAddress,
+      signers.alice.address,
+      "Shipping contents"
+    );
+
     // Add event with InTransit status
     tx = await secureCargoFlowContract
       .connect(signers.alice)
-      .addCargoEvent(trackingId, "In Transit", 1, "Shipping");
+      .addCargoEvent(
+        trackingId,
+        "In Transit",
+        1,
+        "Shipping",
+        encryptedWeight.handles[0],
+        encryptedWeight.inputProof,
+        encryptedContents.handles,
+        encryptedContents.inputProof
+      );
     await tx.wait();
 
     // Current status should be InTransit

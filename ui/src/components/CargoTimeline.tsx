@@ -301,6 +301,8 @@ const AddEventDialogContent = ({
 };
 
 export const CargoTimeline = () => {
+  const [unlockedEvents, setUnlockedEvents] = useState<Map<string, { weight?: number; contents?: string }>>(new Map());
+  const [decryptingEvents, setDecryptingEvents] = useState<Set<string>>(new Set());
   const [trackingId, setTrackingId] = useState<string>("");
   const [searchTrackingId, setSearchTrackingId] = useState<string>("");
   const [cargoEvents, setCargoEvents] = useState<CargoEvent[]>([]);
@@ -310,7 +312,7 @@ export const CargoTimeline = () => {
   const [addEventDialogOpen, setAddEventDialogOpen] = useState(false);
   const { isConnected } = useAccount();
   const publicClient = usePublicClient();
-  const { getShipment, loadCargoEvents, addCargoEvent, getEventCount, isPending } = useSecureCargoFlow();
+  const { getShipment, loadCargoEvents, addCargoEvent, getEventCount, isPending, decryptWeight, decryptContents } = useSecureCargoFlow();
 
   const eventForm = useForm<EventFormValues>({
     resolver: zodResolver(eventSchema),
@@ -405,6 +407,54 @@ export const CargoTimeline = () => {
       toast.error("Please enter a tracking ID");
     }
   }, [searchTrackingId, loadShipmentData]);
+
+  const handleDecrypt = useCallback(async (trackingId: string, eventIndex: number, eventId: string) => {
+    if (!isConnected) {
+      toast.error("Please connect your wallet to decrypt cargo data");
+      return;
+    }
+
+    const isUnlocked = unlockedEvents.has(eventId);
+    if (isUnlocked) {
+      // Re-encrypt (remove from unlocked)
+      setUnlockedEvents((prev) => {
+        const newUnlocked = new Map(prev);
+        newUnlocked.delete(eventId);
+        return newUnlocked;
+      });
+      toast.success("Data encrypted");
+      return;
+    }
+
+    setDecryptingEvents((prev) => new Set(prev).add(eventId));
+    try {
+      // Decrypt both weight and contents
+      const [decryptedWeight, decryptedContents] = await Promise.all([
+        decryptWeight(trackingId, eventIndex),
+        decryptContents(trackingId, eventIndex),
+      ]);
+
+      if (decryptedWeight !== null || decryptedContents !== null) {
+        setUnlockedEvents((prev) => {
+          const newUnlocked = new Map(prev);
+          newUnlocked.set(eventId, {
+            weight: decryptedWeight ?? undefined,
+            contents: decryptedContents ?? undefined,
+          });
+          return newUnlocked;
+        });
+        toast.success("Data decrypted successfully");
+      } else {
+        toast.error("Failed to decrypt data");
+      }
+    } finally {
+      setDecryptingEvents((prev) => {
+        const next = new Set(prev);
+        next.delete(eventId);
+        return next;
+      });
+    }
+  }, [isConnected, unlockedEvents, decryptWeight, decryptContents]);
 
   const formatTimestamp = useCallback((timestamp: number) => {
     return new Date(timestamp * 1000).toLocaleString("en-US", {
@@ -549,6 +599,13 @@ export const CargoTimeline = () => {
           <div className="absolute left-6 top-0 bottom-0 w-0.5 bg-border" />
 
           {cargoEvents.map((event, index) => {
+            const unlockedData = unlockedEvents.get(event.eventId);
+            const isUnlocked = !!unlockedData;
+            const isDecrypting = decryptingEvents.has(event.eventId);
+            const showEncrypted = event.isEncrypted && !isUnlocked;
+            const decryptedWeight = unlockedData?.weight;
+            const decryptedContents = unlockedData?.contents;
+
             return (
               <div key={event.eventId} className="relative pl-16 pb-8 last:pb-0">
                 {/* Timeline dot */}
@@ -563,6 +620,33 @@ export const CargoTimeline = () => {
                       </div>
                       <p className="text-sm text-muted-foreground">{formatTimestamp(event.timestamp)}</p>
                     </div>
+
+                    {event.isEncrypted && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleDecrypt(trackingId, index, event.eventId)}
+                        className="ml-4"
+                        disabled={isDecrypting}
+                      >
+                        {isDecrypting ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Decrypting...
+                          </>
+                        ) : isUnlocked ? (
+                          <>
+                            <LockOpen className="h-4 w-4 mr-2 text-green-600" />
+                            Unlocked
+                          </>
+                        ) : (
+                          <>
+                            <Lock className="h-4 w-4 mr-2 text-muted-foreground" />
+                            Locked
+                          </>
+                        )}
+                      </Button>
+                    )}
                   </div>
 
                   <div className="space-y-3">
@@ -573,14 +657,31 @@ export const CargoTimeline = () => {
                       </span>
                     </div>
 
-                    {/* Description/Contents */}
-                    {event.contents && (
-                      <div className="flex items-start gap-2 text-sm">
-                        <Package className="h-4 w-4 text-muted-foreground mt-0.5" />
-                        <div className="flex-1">
-                          <span className="font-medium text-foreground">Description: </span>
-                          <span className="text-muted-foreground">{event.contents}</span>
-                        </div>
+                    {/* Weight is encrypted */}
+                    {event.isEncrypted && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <Scale className="h-4 w-4 text-muted-foreground" />
+                        <span className="font-medium text-foreground">Weight:</span>
+                        <span className={showEncrypted ? "blur-sm select-none" : ""}>
+                          {showEncrypted
+                            ? "████ kg"
+                            : decryptedWeight !== undefined
+                            ? `${decryptedWeight.toFixed(2)} kg`
+                            : "N/A"}
+                        </span>
+                        {showEncrypted && <Lock className="h-3 w-3 text-muted-foreground ml-1" />}
+                      </div>
+                    )}
+
+                    {/* Contents is encrypted */}
+                    {event.isEncrypted && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <Package className="h-4 w-4 text-muted-foreground" />
+                        <span className="font-medium text-foreground">Contents:</span>
+                        <span className={showEncrypted ? "blur-sm select-none" : ""}>
+                          {showEncrypted ? "████████████████" : decryptedContents || "N/A"}
+                        </span>
+                        {showEncrypted && <Lock className="h-3 w-3 text-muted-foreground ml-1" />}
                       </div>
                     )}
                   </div>
@@ -596,7 +697,7 @@ export const CargoTimeline = () => {
           <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
             <Lock className="h-5 w-5 text-muted-foreground flex-shrink-0" />
             <p className="text-sm text-muted-foreground">
-              Connect your wallet to add cargo events
+              Connect your wallet to decrypt sensitive cargo information
             </p>
           </div>
         </Card>
